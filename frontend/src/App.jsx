@@ -17,12 +17,12 @@ function App() {
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
-      if (e.ctrlKey && e.key === "z") {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
         e.preventDefault();
         setUndoFlag((f) => f + 1);
       }
 
-      if (e.ctrlKey && e.key === "y") {
+      if ((e.ctrlKey || e.metaKey) && e.key === "y") {
         e.preventDefault();
         setRedoFlag((f) => f + 1);
       }

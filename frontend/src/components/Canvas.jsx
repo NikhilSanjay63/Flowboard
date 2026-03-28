@@ -76,8 +76,9 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
     historyIndex.current -= 1;
     const snapshot = history.current[historyIndex.current];
     isMutating.current = true;
-    canvas.loadFromJSON(snapshot).then(() => {
+    canvas.loadFromJSON(snapshot).then(async () => {
       canvas.renderAll();
+      await new Promise(resolve => setTimeout(resolve, 0));
       isMutating.current = false;
     });
   }, [undoFlag]);
@@ -90,8 +91,9 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
     historyIndex.current += 1;
     const snapshot = history.current[historyIndex.current];
     isMutating.current = true;
-    canvas.loadFromJSON(snapshot).then(() => {
+    canvas.loadFromJSON(snapshot).then(async () => {
       canvas.renderAll();
+      await new Promise(resolve => setTimeout(resolve, 0));
       isMutating.current = false;
     });
   }, [redoFlag]);
@@ -174,8 +176,8 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
               Math.pow(pointer.y - originY.current, 2)
             ) / 2;
           activeShape.current.set({
-            left: Math.min(pointer.x, originX.current),
-            top: Math.min(pointer.y, originY.current),
+            left: (pointer.x + originX.current) / 2,
+            top: (pointer.y + originY.current) / 2,
             radius: radius,
           });
         }
