@@ -11,9 +11,38 @@ function App() {
   const [redoFlag, setRedoFlag] = useState(0);
   const deleteSelectedRef = useRef(null);
 
+  // Image import
+  const [imageFile, setImageFile] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) setImageFile(file);
+  };
+
+  // PNG export
+  const exportCanvasRef = useRef(null);
+
+  const handleExportPNG = () => {
+    if (exportCanvasRef.current) exportCanvasRef.current();
+  };
+
+  // PDF export
+  const exportPDFRef = useRef(null);
+
+  const handleExportPDF = () => {
+  if (exportPDFRef.current) exportPDFRef.current();
+};
+
+// PPTX export
+const exportPPTXRef = useRef(null);
+
+const handleExportPPTX = () => {
+  if (exportPPTXRef.current) exportPPTXRef.current();
+};
+
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Don't fire shortcuts when user is typing in a text field
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
@@ -21,16 +50,12 @@ function App() {
         e.preventDefault();
         setUndoFlag((f) => f + 1);
       }
-
       if ((e.ctrlKey || e.metaKey) && e.key === "y") {
         e.preventDefault();
         setRedoFlag((f) => f + 1);
       }
-
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (deleteSelectedRef.current) {
-          deleteSelectedRef.current();
-        }
+        if (deleteSelectedRef.current) deleteSelectedRef.current();
       }
     };
 
@@ -40,6 +65,15 @@ function App() {
 
   return (
     <div style={{ margin: 0, padding: 0, overflow: "hidden" }}>
+      {/* Hidden file input for image import */}
+      <input
+        type="file"
+        accept="image/*"
+        ref={fileInputRef}
+        style={{ display: "none" }}
+        onChange={handleImageUpload}
+      />
+
       <Toolbar
         activeTool={activeTool}
         onToolChange={setActiveTool}
@@ -50,6 +84,10 @@ function App() {
         onClear={() => setClearFlag((f) => f + 1)}
         onUndo={() => setUndoFlag((f) => f + 1)}
         onRedo={() => setRedoFlag((f) => f + 1)}
+        onImportImage={() => fileInputRef.current.click()}
+        onExportPNG={handleExportPNG}
+        onExportPDF={handleExportPDF}
+        onExportPPTX={handleExportPPTX}
       />
       <Canvas
         activeTool={activeTool}
@@ -59,6 +97,10 @@ function App() {
         undoFlag={undoFlag}
         redoFlag={redoFlag}
         deleteSelectedRef={deleteSelectedRef}
+        imageFile={imageFile}
+        exportCanvasRef={exportCanvasRef}
+        exportPDFRef={exportPDFRef}
+        exportPPTXRef={exportPPTXRef}
       />
     </div>
   );

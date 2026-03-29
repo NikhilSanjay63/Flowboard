@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
-import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText } from "fabric";
+import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText, FabricImage } from "fabric";
+import { jsPDF } from "jspdf";
+import PptxGenJS from "pptxgenjs";
 
-function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef }) {
+function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef, imageFile, exportCanvasRef, exportPDFRef, exportPPTXRef }) {
   const canvasElRef = useRef(null);
   const fabricRef = useRef(null);
   const isDrawingShape = useRef(false);
@@ -228,11 +230,149 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
     saveSnapshot();
   }, [clearFlag]);
 
+  // Import image onto canvas
+useEffect(() => {
+  const canvas = fabricRef.current;
+  if (!canvas || !imageFile) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const imgElement = new Image();
+    imgElement.src = e.target.result;
+    imgElement.onload = () => {
+      const fabricImage = new FabricImage(imgElement);
+      const maxWidth = canvas.getWidth() * 0.6;
+      if (fabricImage.width > maxWidth) {
+        fabricImage.scaleToWidth(maxWidth);
+      }
+      canvas.add(fabricImage);
+      canvas.setActiveObject(fabricImage);
+      canvas.renderAll();
+      saveSnapshot();
+    };
+  };
+  reader.readAsDataURL(imageFile);
+}, [imageFile]);
+
+// Drag-and-drop image import
+useEffect(() => {
+  const canvasEl = canvasElRef.current;
+  if (!canvasEl) return;
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const file = e.dataTransfer.files[0];
+    if (!file || !file.type.startsWith("image/")) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const imgElement = new Image();
+      imgElement.src = ev.target.result;
+      imgElement.onload = () => {
+        const fabricImage = new FabricImage(imgElement);
+        const maxWidth = fabricRef.current.getWidth() * 0.6;
+        if (fabricImage.width > maxWidth) {
+          fabricImage.scaleToWidth(maxWidth);
+        }
+        const rect = canvasEl.getBoundingClientRect();
+        fabricImage.set({
+          left: e.clientX - rect.left,
+          top: e.clientY - rect.top,
+        });
+        fabricRef.current.add(fabricImage);
+        fabricRef.current.setActiveObject(fabricImage);
+        fabricRef.current.renderAll();
+        saveSnapshot();
+      };
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Block on document level so browser never navigates away
+  document.addEventListener("dragover", handleDragOver);
+  document.addEventListener("drop", handleDrop);
+
+  return () => {
+    document.removeEventListener("dragover", handleDragOver);
+    document.removeEventListener("drop", handleDrop);
+  };
+}, []);
+
+// Register PNG export handler
+useEffect(() => {
+  if (!exportCanvasRef) return;
+  exportCanvasRef.current = () => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const dataURL = canvas.toDataURL({ format: "png", multiplier: 2 });
+    const link = document.createElement("a");
+    link.href = dataURL;
+    link.download = "flowboard-export.png";
+    link.click();
+  };
+}, [exportCanvasRef]);
+
+// Register PDF export handler
+useEffect(() => {
+  if (!exportPDFRef) return;
+  exportPDFRef.current = () => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const dataURL = canvas.toDataURL({ format: "png", multiplier: 1 });
+    const widthPx = canvas.getWidth();
+    const heightPx = canvas.getHeight();
+    // Convert pixels to mm (jsPDF uses mm by default, 1px = 0.264583mm)
+    const widthMm = widthPx * 0.264583;
+    const heightMm = heightPx * 0.264583;
+    const pdf = new jsPDF({
+      orientation: widthPx > heightPx ? "landscape" : "portrait",
+      unit: "mm",
+      format: [widthMm, heightMm],
+    });
+    pdf.addImage(dataURL, "PNG", 0, 0, widthMm, heightMm);
+    pdf.save("flowboard-export.pdf");
+  };
+}, [exportPDFRef]);
+
+// Register PPTX export handler
+useEffect(() => {
+  if (!exportPPTXRef) return;
+  exportPPTXRef.current = () => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const dataURL = canvas.toDataURL({ format: "png", multiplier: 1 });
+    const widthPx = canvas.getWidth();
+    const heightPx = canvas.getHeight();
+    // Convert pixels to inches (pptxgenjs uses inches, 96px = 1 inch)
+    const widthIn = widthPx / 96;
+    const heightIn = heightPx / 96;
+    const pptx = new PptxGenJS();
+    pptx.defineLayout({ name: "CANVAS", width: widthIn, height: heightIn });
+    pptx.layout = "CANVAS";
+    const slide = pptx.addSlide();
+    slide.addImage({
+      data: dataURL,
+      x: 0,
+      y: 0,
+      w: widthIn,
+      h: heightIn,
+    });
+    pptx.writeFile({ fileName: "flowboard-export.pptx" });
+  };
+}, [exportPPTXRef]);
+
   return (
-    <div style={{ overflow: "hidden", width: "100vw", height: "100vh" }}>
-      <canvas ref={canvasElRef} />
-    </div>
-  );
+  <div style={{ overflow: "hidden", width: "100vw", height: "100vh" }}>
+    <canvas ref={canvasElRef} />
+  </div>
+);
 }
 
 export default Canvas;

@@ -8,7 +8,7 @@ const ICONS = {
   text: "T",
 };
 
-function Toolbar({ activeTool, onToolChange, color, onColorChange, strokeWidth, onStrokeWidthChange, onClear, onUndo, onRedo }) {
+function Toolbar({ activeTool, onToolChange, color, onColorChange, strokeWidth, onStrokeWidthChange, onClear, onUndo, onRedo, onImportImage, onExportPNG, onExportPDF, onExportPPTX }) {
   return (
     <div style={{
       position: "fixed",
@@ -156,6 +156,85 @@ function Toolbar({ activeTool, onToolChange, color, onColorChange, strokeWidth, 
       >
         🗑️
       </button>
+
+      {/* Import Image */}
+      <button
+        title="Import Image"
+        onClick={onImportImage}
+        style={{
+          width: "40px",
+          height: "40px",
+          borderRadius: "10px",
+          border: "none",
+          cursor: "pointer",
+          fontSize: "18px",
+          backgroundColor: "#2e2e3e",
+          color: "#ffffff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+      🖼️
+      </button>
+      <button
+        title="Export PNG"
+        onClick={onExportPNG}
+        style={{
+          width: "40px",
+          height: "40px",
+          borderRadius: "10px",
+          border: "none",
+          cursor: "pointer",
+          fontSize: "18px",
+          backgroundColor: "#2e2e3e",
+          color: "#ffffff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          }}
+        >
+       📷
+        </button>
+      <button
+          title="Export PDF"
+          onClick={onExportPDF}
+          style={{
+            width: "40px",
+            height: "40px",
+            borderRadius: "10px",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "18px",
+            backgroundColor: "#2e2e3e",
+            color: "#ffffff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            }}
+        >
+          📄
+       </button>
+
+       <button
+            title="Export PPTX"
+            onClick={onExportPPTX}
+            style={{
+              width: "40px",
+              height: "40px",
+              borderRadius: "10px",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "18px",
+              backgroundColor: "#2e2e3e",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              }}
+>
+        📊
+        </button>
 
     </div>
   );
