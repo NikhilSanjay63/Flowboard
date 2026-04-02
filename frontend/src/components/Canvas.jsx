@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
-import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText, FabricImage } from "fabric";
+import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText, FabricImage, Text } from "fabric";
 import { jsPDF } from "jspdf";
 import PptxGenJS from "pptxgenjs";
 
-function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef, imageFile, exportCanvasRef, exportPDFRef, exportPPTXRef }) {
+function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef, imageFile, exportCanvasRef, exportPDFRef, exportPPTXRef, sendToCanvasRef }) {
   const canvasElRef = useRef(null);
   const fabricRef = useRef(null);
   const isDrawingShape = useRef(false);
@@ -367,6 +367,93 @@ useEffect(() => {
     pptx.writeFile({ fileName: "flowboard-export.pptx" });
   };
 }, [exportPPTXRef]);
+
+// Register the Send to Canvas handler
+if (sendToCanvasRef) {
+  sendToCanvasRef.current = (columns) => {
+    const canvas = fabricRef.current;   // ← get the instance correctly
+    if (!canvas) return;
+
+    const COLUMN_WIDTH = 180;
+    const COLUMN_PADDING = 16;
+    const CARD_HEIGHT = 36;
+    const CARD_GAP = 8;
+    const COLUMN_GAP = 24;
+    const START_X = 60;
+    const START_Y = 60;
+    const TITLE_HEIGHT = 40;
+
+    columns.forEach((column, colIndex) => {
+      const columnHeight =
+        TITLE_HEIGHT +
+        COLUMN_PADDING +
+        column.cards.length * (CARD_HEIGHT + CARD_GAP) +
+        COLUMN_PADDING;
+
+      const x = START_X + colIndex * (COLUMN_WIDTH + COLUMN_GAP);
+      const y = START_Y;
+
+      const colRect = new Rect({
+        left: x,
+        top: y,
+        width: COLUMN_WIDTH,
+        height: Math.max(columnHeight, 120),
+        fill: "#313244",
+        rx: 8,
+        ry: 8,
+        selectable: true,
+        stroke: "#45475a",
+        strokeWidth: 1,
+      });
+
+      const colTitle = new Text(column.title, {
+        left: x + COLUMN_PADDING,
+        top: y + 12,
+        fontSize: 14,
+        fontWeight: "bold",
+        fill: "#89b4fa",
+        selectable: false,
+        fontFamily: "Arial",
+      });
+
+      canvas.add(colRect);       // ✅ canvas, not fabricCanvas
+      canvas.add(colTitle);      // ✅
+
+      column.cards.forEach((card, cardIndex) => {
+        const cardX = x + COLUMN_PADDING;
+        const cardY = y + TITLE_HEIGHT + cardIndex * (CARD_HEIGHT + CARD_GAP);
+
+        const cardRect = new Rect({   // ✅ Rect, not fabric.Rect
+          left: cardX,
+          top: cardY,
+          width: COLUMN_WIDTH - COLUMN_PADDING * 2,
+          height: CARD_HEIGHT,
+          fill: "#45475a",
+          rx: 4,
+          ry: 4,
+          selectable: true,
+          stroke: "#585b70",
+          strokeWidth: 1,
+        });
+
+        const cardText = new Text(card.text, {
+          left: cardX + 8,
+          top: cardY + 10,
+          fontSize: 11,
+          fill: "#cdd6f4",
+          selectable: false,
+          fontFamily: "Arial",
+          width: COLUMN_WIDTH - COLUMN_PADDING * 2 - 16,
+        });
+
+        canvas.add(cardRect);    // ✅
+        canvas.add(cardText);    // ✅
+      });
+    });
+
+    canvas.renderAll();          // ✅
+  };
+}
 
   return (
   <div style={{ overflow: "hidden", width: "100vw", height: "100vh" }}>
