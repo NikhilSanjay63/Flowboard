@@ -143,6 +143,23 @@ function moveCard(cardId, fromColumnId, toColumnId) {
   });
 }
 
+function addColumn() {
+  const title = prompt("Enter column title:");
+  if (!title || title.trim() === "") return;
+
+  const newColumn = {
+    id: "col-" + Date.now(),
+    title: title.trim(),
+    cards: [],
+  };
+
+  setKanbanColumns((prev) => [...prev, newColumn]);
+}
+
+function deleteColumn(columnId) {
+  setKanbanColumns((prev) => prev.filter((col) => col.id !== columnId));
+}
+
   return (
     <div style={{ margin: 0, padding: 0, overflow: "hidden" }}>
       {/* Hidden file input for image import */}
@@ -154,24 +171,6 @@ function moveCard(cardId, fromColumnId, toColumnId) {
         onChange={handleImageUpload}
       />
 
-      <button
-      onClick={() => setIsKanbanOpen((prev) => !prev)}
-     style={{
-        position: "fixed",
-        bottom: "24px",
-        right: "24px",
-        zIndex: 200,
-        padding: "10px 18px",
-        backgroundColor: "#89b4fa",
-        border: "none",
-        borderRadius: "8px",
-        cursor: "pointer",
-        fontWeight: 600,
-        fontSize: "14px",
-       }}
-      >
-        📋 Kanban
-      </button>
 
       <Toolbar
         activeTool={activeTool}
@@ -187,6 +186,8 @@ function moveCard(cardId, fromColumnId, toColumnId) {
         onExportPNG={handleExportPNG}
         onExportPDF={handleExportPDF}
         onExportPPTX={handleExportPPTX}
+        showKanban={isKanbanOpen}
+        onToggleKanban={() => setIsKanbanOpen(prev => !prev)}
       />
       <Canvas
         activeTool={activeTool}
@@ -209,6 +210,8 @@ function moveCard(cardId, fromColumnId, toColumnId) {
     onAddCard={addCard}
     onDeleteCard={deleteCard}
     onMoveCard={moveCard}
+    onAddColumn={addColumn}
+    onDeleteColumn={deleteColumn}
     onSendToCanvas={() => {
       if (sendToCanvasRef.current) {
         sendToCanvasRef.current(kanbanColumns);

@@ -1,5 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from database.db import engine, Base
+from routers import boards
+
+# Create all tables in the database on startup
+# If the table already exists, this does nothing — it's safe to call every time
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="FlowBoard API")
 
@@ -14,3 +20,6 @@ app.add_middleware(
 @app.get("/health")
 def health_check():
     return {"status": "ok", "app": "FlowBoard"}
+
+# Register the boards router — all its endpoints now live under /boards
+app.include_router(boards.router)
