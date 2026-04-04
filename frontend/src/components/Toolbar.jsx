@@ -36,7 +36,7 @@ function Toolbar({
   onClear, onUndo, onRedo,
   onImportImage,
   onExportPNG, onExportPDF, onExportPPTX,
-  showKanban, onToggleKanban,
+  showKanban, onToggleKanban, onSaveBoard, onLoadBoard, showAI, onToggleAI
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -158,6 +158,34 @@ function Toolbar({
           <button title="Export PPTX" onClick={onExportPPTX} style={btnStyle}>📊</button>
 
           {divider}
+
+          {/* Save / Load */}
+          <button title="Save Board" onClick={onSaveBoard}
+            style={{ ...btnStyle, backgroundColor: "#2563eb", width: "auto", padding: "0 10px", fontSize: "13px" }}>
+            💾 Save
+          </button>
+          <button title="Load Board" onClick={onLoadBoard}
+            style={{ ...btnStyle, backgroundColor: "#7c3aed", width: "auto", padding: "0 10px", fontSize: "13px" }}>
+            📂 Load
+          </button>
+
+          {divider}
+
+          {/* AI Diagram */}
+          <button
+            title="AI Diagram Generator"
+            onClick={onToggleAI}
+            style={{
+              ...btnStyle,
+              width: "auto",
+              padding: "0 12px",
+              backgroundColor: showAI ? "#7c3aed" : "#2e2e3e",
+              fontWeight: "bold",
+              fontSize: "14px",
+            }}
+          >
+            🤖 AI
+          </button>
 
           {/* Kanban Toggle */}
           <button

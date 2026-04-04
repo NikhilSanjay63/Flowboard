@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import Canvas from "./components/Canvas";
 import Toolbar from "./components/Toolbar";
 import KanbanBoard from "./components/KanbanBoard";
+import AIDiagram from "./components/AIDiagram";
 
 function App() {
   const [activeTool, setActiveTool] = useState("select");
@@ -41,6 +42,56 @@ const exportPPTXRef = useRef(null);
 const handleExportPPTX = () => {
   if (exportPPTXRef.current) exportPPTXRef.current();
 };
+
+const getCanvasJSONRef = useRef(null);
+
+const handleSaveBoard = async () => {
+  if (!getCanvasJSONRef.current) return;
+
+  const canvasJSON = getCanvasJSONRef.current();
+  const boardName = `FlowBoard Save — ${new Date().toLocaleString()}`;
+
+  try {
+    const response = await fetch("http://localhost:8000/boards/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: boardName, canvas_state: canvasJSON }),
+    });
+
+    const data = await response.json();
+    alert(`Board saved! ID: ${data.id}`);
+    localStorage.setItem("flowboard_last_id", data.id);
+  } catch (err) {
+    alert("Save failed. Is the backend running?");
+    console.error(err);
+  }
+};
+
+const loadCanvasJSONRef = useRef(null);
+
+const handleLoadBoard = async () => {
+  const id = localStorage.getItem("flowboard_last_id");
+  if (!id) {
+    alert("No saved board found. Save a board first!");
+    return;
+  }
+
+  try {
+    const response = await fetch(`http://localhost:8000/boards/${id}`);
+    const data = await response.json();
+
+    if (!loadCanvasJSONRef.current) return;
+    await loadCanvasJSONRef.current(data.canvas_state);
+    alert("Board loaded successfully!");
+  } catch (err) {
+    alert("Load failed. Is the backend running?");
+    console.error(err);
+  }
+};
+
+const [showAI, setShowAI] = useState(false);
+
+const insertDiagramRef = useRef(null);
 
 const [isKanbanOpen, setIsKanbanOpen] = useState(false);
 
@@ -188,6 +239,10 @@ function deleteColumn(columnId) {
         onExportPPTX={handleExportPPTX}
         showKanban={isKanbanOpen}
         onToggleKanban={() => setIsKanbanOpen(prev => !prev)}
+        onSaveBoard={handleSaveBoard}
+        onLoadBoard={handleLoadBoard}
+        showAI={showAI}
+        onToggleAI={() => setShowAI(prev => !prev)}
       />
       <Canvas
         activeTool={activeTool}
@@ -202,6 +257,9 @@ function deleteColumn(columnId) {
         exportPDFRef={exportPDFRef}
         exportPPTXRef={exportPPTXRef}
         sendToCanvasRef={sendToCanvasRef}
+        getCanvasJSONRef={getCanvasJSONRef}
+        loadCanvasJSONRef={loadCanvasJSONRef}
+        insertDiagramRef={insertDiagramRef}
       />
   {isKanbanOpen && (
   <KanbanBoard
@@ -217,6 +275,16 @@ function deleteColumn(columnId) {
         sendToCanvasRef.current(kanbanColumns);
       }
       setIsKanbanOpen(false); // close panel after sending
+    }}
+  />
+)}
+
+{showAI && (
+  <AIDiagram
+    onClose={() => setShowAI(false)}
+    onInsertDiagram={(pngUrl) => {
+      if (insertDiagramRef.current) insertDiagramRef.current(pngUrl);
+      setShowAI(false);
     }}
   />
 )}

@@ -1,9 +1,9 @@
 import { useEffect, useRef } from "react";
-import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText, FabricImage, Text } from "fabric";
+import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText, FabricImage, Text, loadSVGFromString, util } from "fabric";
 import { jsPDF } from "jspdf";
 import PptxGenJS from "pptxgenjs";
 
-function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef, imageFile, exportCanvasRef, exportPDFRef, exportPPTXRef, sendToCanvasRef }) {
+function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef, imageFile, exportCanvasRef, exportPDFRef, exportPPTXRef, sendToCanvasRef, getCanvasJSONRef, loadCanvasJSONRef, insertDiagramRef }) {
   const canvasElRef = useRef(null);
   const fabricRef = useRef(null);
   const isDrawingShape = useRef(false);
@@ -367,6 +367,77 @@ useEffect(() => {
     pptx.writeFile({ fileName: "flowboard-export.pptx" });
   };
 }, [exportPPTXRef]);
+
+// Register getCanvasJSON handler
+useEffect(() => {
+  if (!getCanvasJSONRef) return;
+  getCanvasJSONRef.current = () => JSON.stringify(fabricRef.current.toJSON());
+}, [getCanvasJSONRef]);
+
+// Register loadCanvasJSON handler
+useEffect(() => {
+  if (!loadCanvasJSONRef) return;
+  loadCanvasJSONRef.current = async (jsonString) => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    isMutating.current = true;
+    await canvas.loadFromJSON(jsonString);
+    console.log("objects after load:", canvas.getObjects().length);
+    console.log("first object:", canvas.getObjects()[0]);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    canvas.requestRenderAll();
+    canvas.renderAll();
+    console.log("render called");
+    isMutating.current = false;
+    saveSnapshot();
+  };
+}, [loadCanvasJSONRef]);
+
+// Register insertDiagram handler
+useEffect(() => {
+  if (!insertDiagramRef) return;
+  insertDiagramRef.current = async (svgDataUrl) => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+
+    const svgString = decodeURIComponent(
+      svgDataUrl.replace("data:image/svg+xml;charset=utf-8,", "")
+    );
+
+    // Parse SVG dimensions
+    const parser = new DOMParser();
+    const svgDoc = parser.parseFromString(svgString, "image/svg+xml");
+    const svgEl = svgDoc.querySelector("svg");
+    const viewBox = svgEl?.getAttribute("viewBox")?.split(" ").map(Number);
+    const svgWidth = viewBox?.[2] || parseFloat(svgEl?.getAttribute("width")) || 800;
+    const svgHeight = viewBox?.[3] || parseFloat(svgEl?.getAttribute("height")) || 600;
+
+    // Force white background and explicit size in the SVG
+    svgEl.setAttribute("width", svgWidth);
+    svgEl.setAttribute("height", svgHeight);
+    const bgRect = svgDoc.createElementNS("http://www.w3.org/2000/svg", "rect");
+    bgRect.setAttribute("width", "100%");
+    bgRect.setAttribute("height", "100%");
+    bgRect.setAttribute("fill", "white");
+    svgEl.insertBefore(bgRect, svgEl.firstChild);
+
+    const finalSvg = new XMLSerializer().serializeToString(svgDoc);
+    const svgBase64 = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(finalSvg)));
+
+    FabricImage.fromURL(svgBase64).then((fImg) => {
+      const maxWidth = canvas.getWidth() * 0.6;
+      if (fImg.width > maxWidth) fImg.scaleToWidth(maxWidth);
+      fImg.set({
+        left: canvas.getWidth() / 2 - (fImg.width * (fImg.scaleX || 1)) / 2,
+        top: canvas.getHeight() / 2 - (fImg.height * (fImg.scaleY || 1)) / 2,
+      });
+      canvas.add(fImg);
+      canvas.setActiveObject(fImg);
+      canvas.renderAll();
+      saveSnapshot();
+    });
+  };
+}, [insertDiagramRef]);
 
 // Register the Send to Canvas handler
 if (sendToCanvasRef) {
