@@ -4,6 +4,21 @@ import Toolbar from "./components/Toolbar";
 import KanbanBoard from "./components/KanbanBoard";
 import AIDiagram from "./components/AIDiagram";
 
+// Generates a random user ID like "user-a3f9b2"
+function generateUserId() {
+  return 'user-' + Math.random().toString(36).slice(2, 8);
+}
+
+// Generates a consistent color from a user ID string
+function stringToColor(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const h = Math.abs(hash) % 360;
+  return `hsl(${h}, 70%, 45%)`;
+}
+
 function App() {
   const [activeTool, setActiveTool] = useState("select");
   const [color, setColor] = useState("#000000");
@@ -118,7 +133,49 @@ const [kanbanColumns, setKanbanColumns] = useState([
   },
 ]);
 
+// Stable user ID for this browser session
+const userId = useRef(generateUserId());
+
+// The WebSocket connection
+const wsRef = useRef(null);
+
+// Track other users' cursors: { user_id: { x, y, label } }
+const [remoteCursors, setRemoteCursors] = useState({});
+
+// Connect to WebSocket when app loads
+useEffect(() => {
+  const boardId = 'board-1'; // hardcoded for now, one shared room
+  const ws = new WebSocket(
+    `ws://localhost:8000/ws/${boardId}/${userId.current}`
+  );
+
+  ws.onopen = () => {
+    console.log('[WS] Connected to FlowBoard collaboration server');
+  };
+
+  ws.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    handleIncomingMessage(message);
+  };
+
+  ws.onclose = () => {
+    console.log('[WS] Disconnected');
+  };
+
+  ws.onerror = (err) => {
+    console.error('[WS] Error:', err);
+  };
+
+  wsRef.current = ws;
+
+  // Clean up when component unmounts
+  return () => {
+    ws.close();
+  };
+}, []); // empty array = run once on mount
+
 const sendToCanvasRef = useRef(null);
+const canvasRef = useRef(null);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -211,6 +268,31 @@ function deleteColumn(columnId) {
   setKanbanColumns((prev) => prev.filter((col) => col.id !== columnId));
 }
 
+function handleIncomingMessage(message) {
+  console.log('[WS] Incoming message:', message.type)
+
+  if (message.type === 'cursor_move') {
+    // Update the remote cursor position for this user
+    setRemoteCursors(prev => ({
+      ...prev,
+      [message.sender_id]: { x: message.x, y: message.y }
+    }));
+  }
+
+  if (message.type === 'user_left') {
+    // Remove their cursor when they disconnect
+    setRemoteCursors(prev => {
+      const updated = { ...prev };
+      delete updated[message.sender_id];
+      return updated;
+    });
+  }
+
+  if (message.type === 'canvas_update') {
+  canvasRef.current?.applyRemoteUpdate(message.canvasJSON);
+}
+}
+
   return (
     <div style={{ margin: 0, padding: 0, overflow: "hidden" }}>
       {/* Hidden file input for image import */}
@@ -244,23 +326,65 @@ function deleteColumn(columnId) {
         showAI={showAI}
         onToggleAI={() => setShowAI(prev => !prev)}
       />
-      <Canvas
-        activeTool={activeTool}
-        color={color}
-        strokeWidth={strokeWidth}
-        clearFlag={clearFlag}
-        undoFlag={undoFlag}
-        redoFlag={redoFlag}
-        deleteSelectedRef={deleteSelectedRef}
-        imageFile={imageFile}
-        exportCanvasRef={exportCanvasRef}
-        exportPDFRef={exportPDFRef}
-        exportPPTXRef={exportPPTXRef}
-        sendToCanvasRef={sendToCanvasRef}
-        getCanvasJSONRef={getCanvasJSONRef}
-        loadCanvasJSONRef={loadCanvasJSONRef}
-        insertDiagramRef={insertDiagramRef}
-      />
+     <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
+  <Canvas
+    activeTool={activeTool}
+    color={color}
+    strokeWidth={strokeWidth}
+    clearFlag={clearFlag}
+    undoFlag={undoFlag}
+    redoFlag={redoFlag}
+    deleteSelectedRef={deleteSelectedRef}
+    imageFile={imageFile}
+    exportCanvasRef={exportCanvasRef}
+    exportPDFRef={exportPDFRef}
+    exportPPTXRef={exportPPTXRef}
+    sendToCanvasRef={sendToCanvasRef}
+    getCanvasJSONRef={getCanvasJSONRef}
+    loadCanvasJSONRef={loadCanvasJSONRef}
+    insertDiagramRef={insertDiagramRef}
+    wsRef={wsRef}
+    userId={userId}
+    onCanvasReady={(methods) => { canvasRef.current = methods; }}
+  />
+
+  {/* Remote cursor overlays */}
+  {Object.entries(remoteCursors).map(([uid, cursor]) => (
+    <div
+      key={uid}
+      style={{
+        position: 'absolute',
+        left: cursor.x,
+        top: cursor.y,
+        pointerEvents: 'none',      // never blocks canvas interaction
+        transform: 'translate(0, 0)',
+        zIndex: 9999,
+      }}
+    >
+      {/* Cursor arrow */}
+      <svg width="16" height="16" viewBox="0 0 16 16">
+        <path
+          d="M0 0 L0 12 L3.5 9 L6.5 15 L8 14.5 L5 8.5 L9 8.5 Z"
+          fill={stringToColor(uid)}
+          stroke="white"
+          strokeWidth="0.5"
+        />
+      </svg>
+      {/* Name label */}
+      <div style={{
+        background: stringToColor(uid),
+        color: 'white',
+        fontSize: '11px',
+        padding: '1px 5px',
+        borderRadius: '3px',
+        marginTop: '2px',
+        whiteSpace: 'nowrap',
+      }}>
+        {uid.slice(0, 10)}
+      </div>
+    </div>
+  ))}
+</div>
   {isKanbanOpen && (
   <KanbanBoard
     columns={kanbanColumns}

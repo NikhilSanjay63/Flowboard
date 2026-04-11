@@ -1,9 +1,21 @@
 import { useEffect, useRef } from "react";
-import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText, FabricImage, Text, loadSVGFromString, util } from "fabric";
+import { Canvas as FabricCanvas, PencilBrush, Rect, Circle, IText, FabricImage, Text } from "fabric";
 import { jsPDF } from "jspdf";
 import PptxGenJS from "pptxgenjs";
 
-function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef, imageFile, exportCanvasRef, exportPDFRef, exportPPTXRef, sendToCanvasRef, getCanvasJSONRef, loadCanvasJSONRef, insertDiagramRef }) {
+// Returns a version of fn that can only fire once every `limit` milliseconds
+function throttle(fn, limit) {
+  let lastCall = 0;
+  return (...args) => {
+    const now = Date.now();
+    if (now - lastCall >= limit) {
+      lastCall = now;
+      fn(...args);
+    }
+  };
+}
+
+function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag, deleteSelectedRef, imageFile, exportCanvasRef, exportPDFRef, exportPPTXRef, sendToCanvasRef, getCanvasJSONRef, loadCanvasJSONRef, insertDiagramRef, onCanvasReady, wsRef, userId }) {
   const canvasElRef = useRef(null);
   const fabricRef = useRef(null);
   const isDrawingShape = useRef(false);
@@ -34,9 +46,34 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
 
     fabricRef.current = canvas;
 
-    canvas.on("object:added", saveSnapshot);
-    canvas.on("object:modified", saveSnapshot);
-    canvas.on("object:removed", saveSnapshot);
+    // Throttled canvas update sender — max 10 times/second
+    const sendCanvasUpdate = throttle((fabricCanvas) => {
+      if (!wsRef?.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      if (isMutating.current) return;
+      wsRef.current.send(JSON.stringify({
+        type: 'canvas_update',
+        canvasJSON: fabricCanvas.toJSON(),
+      }));
+    }, 100);
+
+    canvas.on("object:added", () => { saveSnapshot(); sendCanvasUpdate(canvas); });
+    canvas.on("object:modified", () => { saveSnapshot(); sendCanvasUpdate(canvas); });
+    canvas.on("object:removed", () => { saveSnapshot(); sendCanvasUpdate(canvas); });
+
+    // Throttled cursor sender — max 20 times/second
+    const sendCursor = throttle((pointer) => {
+      if (!wsRef?.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      wsRef.current.send(JSON.stringify({
+        type: 'cursor_move',
+        x: pointer.x,
+        y: pointer.y,
+      }));
+    }, 50);
+
+    canvas.on("mouse:move", (opt) => {
+      const pointer = canvas.getScenePoint(opt.e);
+      sendCursor(pointer);
+    });
 
     saveSnapshot();
 
@@ -50,13 +87,29 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
 
     window.addEventListener("resize", handleResize);
 
+    // Expose applyRemoteUpdate to App.jsx
+    if (onCanvasReady) {
+      onCanvasReady({
+        applyRemoteUpdate: (canvasJSON) => {
+          if (!fabricRef.current) return;
+          isMutating.current = true;
+          fabricRef.current.loadFromJSON(JSON.stringify(canvasJSON)).then(() => {
+            fabricRef.current.renderAll();
+            setTimeout(() => {
+              isMutating.current = false;
+            }, 50);
+          });
+        }
+      });
+    }
+
     return () => {
       window.removeEventListener("resize", handleResize);
       canvas.dispose();
     };
   }, []);
 
-  // Register delete handler so App.jsx can call it via ref
+  // Register delete handler
   useEffect(() => {
     if (!deleteSelectedRef) return;
     deleteSelectedRef.current = () => {
@@ -100,14 +153,15 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
     });
   }, [redoFlag]);
 
-  // React to tool / color / strokeWidth changes
+  // Tool / color / strokeWidth changes
   useEffect(() => {
     const canvas = fabricRef.current;
     if (!canvas) return;
 
     canvas.off("mouse:down");
-    canvas.off("mouse:move");
     canvas.off("mouse:up");
+    // NOTE: deliberately NOT calling canvas.off("mouse:move")
+    // because that would wipe the cursor tracker registered in the init useEffect
 
     canvas.isDrawingMode = false;
     canvas.selection = true;
@@ -135,24 +189,15 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
         let shape;
         if (activeTool === "rectangle") {
           shape = new Rect({
-            left: pointer.x,
-            top: pointer.y,
-            width: 0,
-            height: 0,
-            fill: "transparent",
-            stroke: color,
-            strokeWidth: strokeWidth,
-            selectable: false,
+            left: pointer.x, top: pointer.y,
+            width: 0, height: 0,
+            fill: "transparent", stroke: color, strokeWidth, selectable: false,
           });
         } else {
           shape = new Circle({
-            left: pointer.x,
-            top: pointer.y,
+            left: pointer.x, top: pointer.y,
             radius: 0,
-            fill: "transparent",
-            stroke: color,
-            strokeWidth: strokeWidth,
-            selectable: false,
+            fill: "transparent", stroke: color, strokeWidth, selectable: false,
           });
         }
 
@@ -163,7 +208,6 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
       canvas.on("mouse:move", (opt) => {
         if (!isDrawingShape.current || !activeShape.current) return;
         const pointer = canvas.getScenePoint(opt.e);
-
         if (activeTool === "rectangle") {
           activeShape.current.set({
             left: Math.min(pointer.x, originX.current),
@@ -172,18 +216,16 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
             height: Math.abs(pointer.y - originY.current),
           });
         } else {
-          const radius =
-            Math.sqrt(
-              Math.pow(pointer.x - originX.current, 2) +
-              Math.pow(pointer.y - originY.current, 2)
-            ) / 2;
+          const radius = Math.sqrt(
+            Math.pow(pointer.x - originX.current, 2) +
+            Math.pow(pointer.y - originY.current, 2)
+          ) / 2;
           activeShape.current.set({
             left: (pointer.x + originX.current) / 2,
             top: (pointer.y + originY.current) / 2,
-            radius: radius,
+            radius,
           });
         }
-
         canvas.renderAll();
       });
 
@@ -198,15 +240,12 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
 
     } else if (activeTool === "text") {
       canvas.defaultCursor = "text";
-
       canvas.on("mouse:down", (opt) => {
         const pointer = canvas.getScenePoint(opt.e);
         const text = new IText("Type here...", {
-          left: pointer.x,
-          top: pointer.y,
+          left: pointer.x, top: pointer.y,
           fontSize: strokeWidth * 6 + 10,
-          fill: color,
-          editable: true,
+          fill: color, editable: true,
         });
         canvas.add(text);
         canvas.setActiveObject(text);
@@ -230,307 +269,205 @@ function Canvas({ activeTool, color, strokeWidth, clearFlag, undoFlag, redoFlag,
     saveSnapshot();
   }, [clearFlag]);
 
-  // Import image onto canvas
-useEffect(() => {
-  const canvas = fabricRef.current;
-  if (!canvas || !imageFile) return;
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const imgElement = new Image();
-    imgElement.src = e.target.result;
-    imgElement.onload = () => {
-      const fabricImage = new FabricImage(imgElement);
-      const maxWidth = canvas.getWidth() * 0.6;
-      if (fabricImage.width > maxWidth) {
-        fabricImage.scaleToWidth(maxWidth);
-      }
-      canvas.add(fabricImage);
-      canvas.setActiveObject(fabricImage);
-      canvas.renderAll();
-      saveSnapshot();
-    };
-  };
-  reader.readAsDataURL(imageFile);
-}, [imageFile]);
-
-// Drag-and-drop image import
-useEffect(() => {
-  const canvasEl = canvasElRef.current;
-  if (!canvasEl) return;
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const file = e.dataTransfer.files[0];
-    if (!file || !file.type.startsWith("image/")) return;
-
+  // Import image
+  useEffect(() => {
+    const canvas = fabricRef.current;
+    if (!canvas || !imageFile) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = (e) => {
       const imgElement = new Image();
-      imgElement.src = ev.target.result;
+      imgElement.src = e.target.result;
       imgElement.onload = () => {
         const fabricImage = new FabricImage(imgElement);
-        const maxWidth = fabricRef.current.getWidth() * 0.6;
-        if (fabricImage.width > maxWidth) {
-          fabricImage.scaleToWidth(maxWidth);
-        }
-        const rect = canvasEl.getBoundingClientRect();
-        fabricImage.set({
-          left: e.clientX - rect.left,
-          top: e.clientY - rect.top,
-        });
-        fabricRef.current.add(fabricImage);
-        fabricRef.current.setActiveObject(fabricImage);
-        fabricRef.current.renderAll();
+        const maxWidth = canvas.getWidth() * 0.6;
+        if (fabricImage.width > maxWidth) fabricImage.scaleToWidth(maxWidth);
+        canvas.add(fabricImage);
+        canvas.setActiveObject(fabricImage);
+        canvas.renderAll();
         saveSnapshot();
       };
     };
-    reader.readAsDataURL(file);
-  };
+    reader.readAsDataURL(imageFile);
+  }, [imageFile]);
 
-  // Block on document level so browser never navigates away
-  document.addEventListener("dragover", handleDragOver);
-  document.addEventListener("drop", handleDrop);
+  // Drag-and-drop image import
+  useEffect(() => {
+    const canvasEl = canvasElRef.current;
+    if (!canvasEl) return;
+    const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); };
+    const handleDrop = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const file = e.dataTransfer.files[0];
+      if (!file || !file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const imgElement = new Image();
+        imgElement.src = ev.target.result;
+        imgElement.onload = () => {
+          const fabricImage = new FabricImage(imgElement);
+          const maxWidth = fabricRef.current.getWidth() * 0.6;
+          if (fabricImage.width > maxWidth) fabricImage.scaleToWidth(maxWidth);
+          const rect = canvasEl.getBoundingClientRect();
+          fabricImage.set({ left: e.clientX - rect.left, top: e.clientY - rect.top });
+          fabricRef.current.add(fabricImage);
+          fabricRef.current.setActiveObject(fabricImage);
+          fabricRef.current.renderAll();
+          saveSnapshot();
+        };
+      };
+      reader.readAsDataURL(file);
+    };
+    document.addEventListener("dragover", handleDragOver);
+    document.addEventListener("drop", handleDrop);
+    return () => {
+      document.removeEventListener("dragover", handleDragOver);
+      document.removeEventListener("drop", handleDrop);
+    };
+  }, []);
 
-  return () => {
-    document.removeEventListener("dragover", handleDragOver);
-    document.removeEventListener("drop", handleDrop);
-  };
-}, []);
+  // PNG export
+  useEffect(() => {
+    if (!exportCanvasRef) return;
+    exportCanvasRef.current = () => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+      const dataURL = canvas.toDataURL({ format: "png", multiplier: 2 });
+      const link = document.createElement("a");
+      link.href = dataURL;
+      link.download = "flowboard-export.png";
+      link.click();
+    };
+  }, [exportCanvasRef]);
 
-// Register PNG export handler
-useEffect(() => {
-  if (!exportCanvasRef) return;
-  exportCanvasRef.current = () => {
-    const canvas = fabricRef.current;
-    if (!canvas) return;
-    const dataURL = canvas.toDataURL({ format: "png", multiplier: 2 });
-    const link = document.createElement("a");
-    link.href = dataURL;
-    link.download = "flowboard-export.png";
-    link.click();
-  };
-}, [exportCanvasRef]);
-
-// Register PDF export handler
-useEffect(() => {
-  if (!exportPDFRef) return;
-  exportPDFRef.current = () => {
-    const canvas = fabricRef.current;
-    if (!canvas) return;
-    const dataURL = canvas.toDataURL({ format: "png", multiplier: 1 });
-    const widthPx = canvas.getWidth();
-    const heightPx = canvas.getHeight();
-    // Convert pixels to mm (jsPDF uses mm by default, 1px = 0.264583mm)
-    const widthMm = widthPx * 0.264583;
-    const heightMm = heightPx * 0.264583;
-    const pdf = new jsPDF({
-      orientation: widthPx > heightPx ? "landscape" : "portrait",
-      unit: "mm",
-      format: [widthMm, heightMm],
-    });
-    pdf.addImage(dataURL, "PNG", 0, 0, widthMm, heightMm);
-    pdf.save("flowboard-export.pdf");
-  };
-}, [exportPDFRef]);
-
-// Register PPTX export handler
-useEffect(() => {
-  if (!exportPPTXRef) return;
-  exportPPTXRef.current = () => {
-    const canvas = fabricRef.current;
-    if (!canvas) return;
-    const dataURL = canvas.toDataURL({ format: "png", multiplier: 1 });
-    const widthPx = canvas.getWidth();
-    const heightPx = canvas.getHeight();
-    // Convert pixels to inches (pptxgenjs uses inches, 96px = 1 inch)
-    const widthIn = widthPx / 96;
-    const heightIn = heightPx / 96;
-    const pptx = new PptxGenJS();
-    pptx.defineLayout({ name: "CANVAS", width: widthIn, height: heightIn });
-    pptx.layout = "CANVAS";
-    const slide = pptx.addSlide();
-    slide.addImage({
-      data: dataURL,
-      x: 0,
-      y: 0,
-      w: widthIn,
-      h: heightIn,
-    });
-    pptx.writeFile({ fileName: "flowboard-export.pptx" });
-  };
-}, [exportPPTXRef]);
-
-// Register getCanvasJSON handler
-useEffect(() => {
-  if (!getCanvasJSONRef) return;
-  getCanvasJSONRef.current = () => JSON.stringify(fabricRef.current.toJSON());
-}, [getCanvasJSONRef]);
-
-// Register loadCanvasJSON handler
-useEffect(() => {
-  if (!loadCanvasJSONRef) return;
-  loadCanvasJSONRef.current = async (jsonString) => {
-    const canvas = fabricRef.current;
-    if (!canvas) return;
-    isMutating.current = true;
-    await canvas.loadFromJSON(jsonString);
-    console.log("objects after load:", canvas.getObjects().length);
-    console.log("first object:", canvas.getObjects()[0]);
-    await new Promise(resolve => setTimeout(resolve, 50));
-    canvas.requestRenderAll();
-    canvas.renderAll();
-    console.log("render called");
-    isMutating.current = false;
-    saveSnapshot();
-  };
-}, [loadCanvasJSONRef]);
-
-// Register insertDiagram handler
-useEffect(() => {
-  if (!insertDiagramRef) return;
-  insertDiagramRef.current = async (svgDataUrl) => {
-    const canvas = fabricRef.current;
-    if (!canvas) return;
-
-    const svgString = decodeURIComponent(
-      svgDataUrl.replace("data:image/svg+xml;charset=utf-8,", "")
-    );
-
-    // Parse SVG dimensions
-    const parser = new DOMParser();
-    const svgDoc = parser.parseFromString(svgString, "image/svg+xml");
-    const svgEl = svgDoc.querySelector("svg");
-    const viewBox = svgEl?.getAttribute("viewBox")?.split(" ").map(Number);
-    const svgWidth = viewBox?.[2] || parseFloat(svgEl?.getAttribute("width")) || 800;
-    const svgHeight = viewBox?.[3] || parseFloat(svgEl?.getAttribute("height")) || 600;
-
-    // Force white background and explicit size in the SVG
-    svgEl.setAttribute("width", svgWidth);
-    svgEl.setAttribute("height", svgHeight);
-    const bgRect = svgDoc.createElementNS("http://www.w3.org/2000/svg", "rect");
-    bgRect.setAttribute("width", "100%");
-    bgRect.setAttribute("height", "100%");
-    bgRect.setAttribute("fill", "white");
-    svgEl.insertBefore(bgRect, svgEl.firstChild);
-
-    const finalSvg = new XMLSerializer().serializeToString(svgDoc);
-    const svgBase64 = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(finalSvg)));
-
-    FabricImage.fromURL(svgBase64).then((fImg) => {
-      const maxWidth = canvas.getWidth() * 0.6;
-      if (fImg.width > maxWidth) fImg.scaleToWidth(maxWidth);
-      fImg.set({
-        left: canvas.getWidth() / 2 - (fImg.width * (fImg.scaleX || 1)) / 2,
-        top: canvas.getHeight() / 2 - (fImg.height * (fImg.scaleY || 1)) / 2,
+  // PDF export
+  useEffect(() => {
+    if (!exportPDFRef) return;
+    exportPDFRef.current = () => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+      const dataURL = canvas.toDataURL({ format: "png", multiplier: 1 });
+      const widthPx = canvas.getWidth();
+      const heightPx = canvas.getHeight();
+      const widthMm = widthPx * 0.264583;
+      const heightMm = heightPx * 0.264583;
+      const pdf = new jsPDF({
+        orientation: widthPx > heightPx ? "landscape" : "portrait",
+        unit: "mm",
+        format: [widthMm, heightMm],
       });
-      canvas.add(fImg);
-      canvas.setActiveObject(fImg);
+      pdf.addImage(dataURL, "PNG", 0, 0, widthMm, heightMm);
+      pdf.save("flowboard-export.pdf");
+    };
+  }, [exportPDFRef]);
+
+  // PPTX export
+  useEffect(() => {
+    if (!exportPPTXRef) return;
+    exportPPTXRef.current = () => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+      const dataURL = canvas.toDataURL({ format: "png", multiplier: 1 });
+      const widthIn = canvas.getWidth() / 96;
+      const heightIn = canvas.getHeight() / 96;
+      const pptx = new PptxGenJS();
+      pptx.defineLayout({ name: "CANVAS", width: widthIn, height: heightIn });
+      pptx.layout = "CANVAS";
+      const slide = pptx.addSlide();
+      slide.addImage({ data: dataURL, x: 0, y: 0, w: widthIn, h: heightIn });
+      pptx.writeFile({ fileName: "flowboard-export.pptx" });
+    };
+  }, [exportPPTXRef]);
+
+  // Get canvas JSON
+  useEffect(() => {
+    if (!getCanvasJSONRef) return;
+    getCanvasJSONRef.current = () => JSON.stringify(fabricRef.current.toJSON());
+  }, [getCanvasJSONRef]);
+
+  // Load canvas JSON
+  useEffect(() => {
+    if (!loadCanvasJSONRef) return;
+    loadCanvasJSONRef.current = async (jsonString) => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+      isMutating.current = true;
+      await canvas.loadFromJSON(jsonString);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      canvas.requestRenderAll();
       canvas.renderAll();
+      isMutating.current = false;
       saveSnapshot();
-    });
-  };
-}, [insertDiagramRef]);
+    };
+  }, [loadCanvasJSONRef]);
 
-// Register the Send to Canvas handler
-if (sendToCanvasRef) {
-  sendToCanvasRef.current = (columns) => {
-    const canvas = fabricRef.current;   // ← get the instance correctly
-    if (!canvas) return;
-
-    const COLUMN_WIDTH = 180;
-    const COLUMN_PADDING = 16;
-    const CARD_HEIGHT = 36;
-    const CARD_GAP = 8;
-    const COLUMN_GAP = 24;
-    const START_X = 60;
-    const START_Y = 60;
-    const TITLE_HEIGHT = 40;
-
-    columns.forEach((column, colIndex) => {
-      const columnHeight =
-        TITLE_HEIGHT +
-        COLUMN_PADDING +
-        column.cards.length * (CARD_HEIGHT + CARD_GAP) +
-        COLUMN_PADDING;
-
-      const x = START_X + colIndex * (COLUMN_WIDTH + COLUMN_GAP);
-      const y = START_Y;
-
-      const colRect = new Rect({
-        left: x,
-        top: y,
-        width: COLUMN_WIDTH,
-        height: Math.max(columnHeight, 120),
-        fill: "#313244",
-        rx: 8,
-        ry: 8,
-        selectable: true,
-        stroke: "#45475a",
-        strokeWidth: 1,
-      });
-
-      const colTitle = new Text(column.title, {
-        left: x + COLUMN_PADDING,
-        top: y + 12,
-        fontSize: 14,
-        fontWeight: "bold",
-        fill: "#89b4fa",
-        selectable: false,
-        fontFamily: "Arial",
-      });
-
-      canvas.add(colRect);       // ✅ canvas, not fabricCanvas
-      canvas.add(colTitle);      // ✅
-
-      column.cards.forEach((card, cardIndex) => {
-        const cardX = x + COLUMN_PADDING;
-        const cardY = y + TITLE_HEIGHT + cardIndex * (CARD_HEIGHT + CARD_GAP);
-
-        const cardRect = new Rect({   // ✅ Rect, not fabric.Rect
-          left: cardX,
-          top: cardY,
-          width: COLUMN_WIDTH - COLUMN_PADDING * 2,
-          height: CARD_HEIGHT,
-          fill: "#45475a",
-          rx: 4,
-          ry: 4,
-          selectable: true,
-          stroke: "#585b70",
-          strokeWidth: 1,
+  // Insert AI diagram
+  useEffect(() => {
+    if (!insertDiagramRef) return;
+    insertDiagramRef.current = async (svgDataUrl) => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+      const svgString = decodeURIComponent(
+        svgDataUrl.replace("data:image/svg+xml;charset=utf-8,", "")
+      );
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(svgString, "image/svg+xml");
+      const svgEl = svgDoc.querySelector("svg");
+      const viewBox = svgEl?.getAttribute("viewBox")?.split(" ").map(Number);
+      const svgWidth = viewBox?.[2] || parseFloat(svgEl?.getAttribute("width")) || 800;
+      const svgHeight = viewBox?.[3] || parseFloat(svgEl?.getAttribute("height")) || 600;
+      svgEl.setAttribute("width", svgWidth);
+      svgEl.setAttribute("height", svgHeight);
+      const bgRect = svgDoc.createElementNS("http://www.w3.org/2000/svg", "rect");
+      bgRect.setAttribute("width", "100%");
+      bgRect.setAttribute("height", "100%");
+      bgRect.setAttribute("fill", "white");
+      svgEl.insertBefore(bgRect, svgEl.firstChild);
+      const finalSvg = new XMLSerializer().serializeToString(svgDoc);
+      const svgBase64 = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(finalSvg)));
+      FabricImage.fromURL(svgBase64).then((fImg) => {
+        const maxWidth = canvas.getWidth() * 0.6;
+        if (fImg.width > maxWidth) fImg.scaleToWidth(maxWidth);
+        fImg.set({
+          left: canvas.getWidth() / 2 - (fImg.width * (fImg.scaleX || 1)) / 2,
+          top: canvas.getHeight() / 2 - (fImg.height * (fImg.scaleY || 1)) / 2,
         });
-
-        const cardText = new Text(card.text, {
-          left: cardX + 8,
-          top: cardY + 10,
-          fontSize: 11,
-          fill: "#cdd6f4",
-          selectable: false,
-          fontFamily: "Arial",
-          width: COLUMN_WIDTH - COLUMN_PADDING * 2 - 16,
-        });
-
-        canvas.add(cardRect);    // ✅
-        canvas.add(cardText);    // ✅
+        canvas.add(fImg);
+        canvas.setActiveObject(fImg);
+        canvas.renderAll();
+        saveSnapshot();
       });
-    });
+    };
+  }, [insertDiagramRef]);
 
-    canvas.renderAll();          // ✅
-  };
-}
+  // Send to canvas (Kanban)
+  if (sendToCanvasRef) {
+    sendToCanvasRef.current = (columns) => {
+      const canvas = fabricRef.current;
+      if (!canvas) return;
+      const COLUMN_WIDTH = 180, COLUMN_PADDING = 16, CARD_HEIGHT = 36;
+      const CARD_GAP = 8, COLUMN_GAP = 24, START_X = 60, START_Y = 60, TITLE_HEIGHT = 40;
+      columns.forEach((column, colIndex) => {
+        const columnHeight = TITLE_HEIGHT + COLUMN_PADDING + column.cards.length * (CARD_HEIGHT + CARD_GAP) + COLUMN_PADDING;
+        const x = START_X + colIndex * (COLUMN_WIDTH + COLUMN_GAP);
+        const y = START_Y;
+        canvas.add(new Rect({ left: x, top: y, width: COLUMN_WIDTH, height: Math.max(columnHeight, 120), fill: "#313244", rx: 8, ry: 8, stroke: "#45475a", strokeWidth: 1 }));
+        canvas.add(new Text(column.title, { left: x + COLUMN_PADDING, top: y + 12, fontSize: 14, fontWeight: "bold", fill: "#89b4fa", selectable: false, fontFamily: "Arial" }));
+        column.cards.forEach((card, cardIndex) => {
+          const cardX = x + COLUMN_PADDING;
+          const cardY = y + TITLE_HEIGHT + cardIndex * (CARD_HEIGHT + CARD_GAP);
+          canvas.add(new Rect({ left: cardX, top: cardY, width: COLUMN_WIDTH - COLUMN_PADDING * 2, height: CARD_HEIGHT, fill: "#45475a", rx: 4, ry: 4, stroke: "#585b70", strokeWidth: 1 }));
+          canvas.add(new Text(card.text, { left: cardX + 8, top: cardY + 10, fontSize: 11, fill: "#cdd6f4", selectable: false, fontFamily: "Arial", width: COLUMN_WIDTH - COLUMN_PADDING * 2 - 16 }));
+        });
+      });
+      canvas.renderAll();
+    };
+  }
 
   return (
-  <div style={{ overflow: "hidden", width: "100vw", height: "100vh" }}>
-    <canvas ref={canvasElRef} />
-  </div>
-);
+    <div style={{ overflow: "hidden", width: "100vw", height: "100vh" }}>
+      <canvas ref={canvasElRef} />
+    </div>
+  );
 }
 
 export default Canvas;
