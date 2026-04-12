@@ -3,11 +3,8 @@ import Canvas from "./components/Canvas";
 import Toolbar from "./components/Toolbar";
 import KanbanBoard from "./components/KanbanBoard";
 import AIDiagram from "./components/AIDiagram";
+import LandingPage from "./components/LandingPage";
 
-// Generates a random user ID like "user-a3f9b2"
-function generateUserId() {
-  return 'user-' + Math.random().toString(36).slice(2, 8);
-}
 
 // Generates a consistent color from a user ID string
 function stringToColor(str) {
@@ -19,7 +16,9 @@ function stringToColor(str) {
   return `hsl(${h}, 70%, 45%)`;
 }
 
+
 function App() {
+  const [session, setSession] = useState(null);
   const [activeTool, setActiveTool] = useState("select");
   const [color, setColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(3);
@@ -134,7 +133,7 @@ const [kanbanColumns, setKanbanColumns] = useState([
 ]);
 
 // Stable user ID for this browser session
-const userId = useRef(generateUserId());
+const userId = session?.displayName;
 
 // The WebSocket connection
 const wsRef = useRef(null);
@@ -144,9 +143,10 @@ const [remoteCursors, setRemoteCursors] = useState({});
 
 // Connect to WebSocket when app loads
 useEffect(() => {
-  const boardId = 'board-1'; // hardcoded for now, one shared room
+  if (!session) return;
+  const boardId = session.boardId; // hardcoded for now, one shared room
   const ws = new WebSocket(
-    `ws://localhost:8000/ws/${boardId}/${userId.current}`
+    `ws://localhost:8000/ws/${boardId}/${session.displayName}`
   );
 
   ws.onopen = () => {
@@ -172,7 +172,7 @@ useEffect(() => {
   return () => {
     ws.close();
   };
-}, []); // empty array = run once on mount
+}, [session]); // Re-run effect if session changes (e.g. user joins a different board)
 
 const sendToCanvasRef = useRef(null);
 const canvasRef = useRef(null);
@@ -275,7 +275,7 @@ function handleIncomingMessage(message) {
     // Update the remote cursor position for this user
     setRemoteCursors(prev => ({
       ...prev,
-      [message.sender_id]: { x: message.x, y: message.y }
+      [message.sender_id]: { x: message.x, y: message.y, label: message.sender_id }
     }));
   }
 
@@ -291,6 +291,10 @@ function handleIncomingMessage(message) {
   if (message.type === 'canvas_update') {
   canvasRef.current?.applyRemoteUpdate(message.canvasJSON);
 }
+}
+
+if (!session) {
+  return <LandingPage onJoin={(s) => setSession(s)} />;
 }
 
   return (
@@ -325,6 +329,7 @@ function handleIncomingMessage(message) {
         onLoadBoard={handleLoadBoard}
         showAI={showAI}
         onToggleAI={() => setShowAI(prev => !prev)}
+        boardName={session.boardName}
       />
      <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
   <Canvas
@@ -372,16 +377,17 @@ function handleIncomingMessage(message) {
       </svg>
       {/* Name label */}
       <div style={{
-        background: stringToColor(uid),
-        color: 'white',
-        fontSize: '11px',
-        padding: '1px 5px',
-        borderRadius: '3px',
-        marginTop: '2px',
-        whiteSpace: 'nowrap',
-      }}>
-        {uid.slice(0, 10)}
-      </div>
+          background: stringToColor(uid),
+          color: 'white',
+          fontSize: '11px',
+          padding: '2px 6px',
+          borderRadius: '4px',
+          marginTop: '2px',
+          whiteSpace: 'nowrap',
+          fontWeight: '600',
+        }}>
+          {cursor.label}
+        </div>
     </div>
   ))}
 </div>
